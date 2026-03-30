@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user roles and current balances.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["cashier", "student"] },
+        "balance": { "type": "number", "description": "Current account balance" },
+        "studentId": { "type": "string", "description": "Official school student ID" },
+        "displayName": { "type": "string" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Transaction": {
+      "title": "Financial Transaction",
+      "description": "Ledger entries for balance loads and payments.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "description": "The student receiving or paying" },
+        "cashierId": { "type": "string", "description": "The cashier who processed the load" },
+        "amount": { "type": "number" },
+        "type": { "type": "string", "enum": ["load", "payment"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "description": { "type": "string" }
+      },
+      "required": ["studentId", "amount", "type", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": "User",
+      "description": "User profiles and balances"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Financial ledger"
+    }
+  }
+}

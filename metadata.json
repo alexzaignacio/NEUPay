@@ -1,0 +1,5 @@
+{
+  "name": "EduPay - School Payment System",
+  "description": "A secure school payment system for cashiers to load student balances and students to track their transaction history.",
+  "requestFramePermissions": []
+}

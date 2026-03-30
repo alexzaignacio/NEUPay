@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    function isCashier() {
+      return isAuthenticated() && getUserData().role == 'cashier';
+    }
+
+    function isStudent() {
+      return isAuthenticated() && getUserData().role == 'student';
+    }
+
+    // User profiles
+    match /users/{userId} {
+      // Users can read their own profile
+      // Cashiers can read student profiles to verify IDs
+      allow read: if isOwner(userId) || isCashier();
+      
+      // Only system/admins should create, but for this demo users create their own on first login
+      allow create: if isOwner(userId) && 
+                    request.resource.data.keys().hasAll(['uid', 'email', 'role', 'balance']) &&
+                    request.resource.data.role in ['student', 'cashier'];
+      
+      // Cashiers can update student balances
+      // Students cannot update their own balance
+      allow update: if isCashier() || (isOwner(userId) && request.resource.data.balance == resource.data.balance);
+    }
+
+    // Transactions
+    match /transactions/{transactionId} {
+      // Students can read their own transactions
+      // Cashiers can read all transactions (or those they processed)
+      allow read: if isCashier() || (isAuthenticated() && request.query.limit <= 100 && 
+                    (resource.data.studentId == request.auth.uid || resource.data.cashierId == request.auth.uid));
+      
+      // Only cashiers can create transactions (loads)
+      allow create: if isCashier() && 
+                    request.resource.data.keys().hasAll(['studentId', 'amount', 'type', 'timestamp', 'cashierId']) &&
+                    request.resource.data.cashierId == request.auth.uid;
+      
+      allow update, delete: if false; // Ledger is immutable
+    }
+  }
+}
