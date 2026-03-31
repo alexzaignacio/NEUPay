@@ -62,5 +62,14 @@ service cloud.firestore {
       allow update: if isCashier();
       allow delete: if isOwner(resource.data.studentId) && resource.data.status == 'pending';
     }
+
+    // QR Load Requests
+    match /load_requests/{requestId} {
+      allow read: if isAuthenticated() && (isOwner(resource.data.studentId) || isCashier());
+      allow create: if isAuthenticated() && isOwner(request.resource.data.studentId) && 
+                    request.resource.data.status == 'pending';
+      allow update: if isCashier();
+      allow delete: if isOwner(resource.data.studentId) && resource.data.status == 'pending';
+    }
   }
 }

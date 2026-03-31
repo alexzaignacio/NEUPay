@@ -28,6 +28,14 @@ export interface TopupRequest {
   timestamp: string;
 }
 
+export interface LoadRequest {
+  id?: string;
+  studentId: string;
+  amount: number;
+  status: 'pending' | 'approved' | 'rejected';
+  timestamp: string;
+}
+
 export interface Fee {
   id: string;
   name: string;

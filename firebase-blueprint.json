@@ -40,6 +40,18 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["studentId", "amount", "method", "status", "timestamp"]
+    },
+    "LoadRequest": {
+      "title": "QR Load Request",
+      "description": "QR-based load requests for over-the-counter processing.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "amount", "status", "timestamp"]
     }
   },
   "firestore": {
@@ -54,6 +66,10 @@
     "/topup_requests/{requestId}": {
       "schema": "TopupRequest",
       "description": "Pending and historical top-up requests"
+    },
+    "/load_requests/{requestId}": {
+      "schema": "LoadRequest",
+      "description": "QR-based load requests"
     }
   }
 }

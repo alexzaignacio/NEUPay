@@ -23,7 +23,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { UserProfile, Transaction, UserRole, TopupRequest, Fee } from './types';
+import { UserProfile, Transaction, UserRole, TopupRequest, Fee, LoadRequest } from './types';
 import { 
   LayoutDashboard, 
   Wallet, 
@@ -35,10 +35,13 @@ import {
   AlertCircle,
   CheckCircle2,
   Loader2,
-  Search
+  Search,
+  QrCode,
+  Check
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
+import { QRCodeCanvas } from 'qrcode.react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -51,8 +54,8 @@ function cn(...inputs: ClassValue[]) {
 
 const RequestLoadModal = ({ isOpen, onClose, studentId }: { isOpen: boolean, onClose: () => void, studentId: string }) => {
   const [amount, setAmount] = useState('');
-  const [method, setMethod] = useState('Gcash');
   const [loading, setLoading] = useState(false);
+  const [requestId, setRequestId] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,19 +63,24 @@ const RequestLoadModal = ({ isOpen, onClose, studentId }: { isOpen: boolean, onC
 
     setLoading(true);
     try {
-      await addDoc(collection(db, 'topup_requests'), {
+      const docRef = await addDoc(collection(db, 'load_requests'), {
         studentId,
         amount: parseFloat(amount),
-        method,
         status: 'pending',
         timestamp: new Date().toISOString()
       });
-      onClose();
+      setRequestId(docRef.id);
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleClose = () => {
+    setAmount('');
+    setRequestId(null);
+    onClose();
   };
 
   if (!isOpen) return null;
@@ -84,48 +92,63 @@ const RequestLoadModal = ({ isOpen, onClose, studentId }: { isOpen: boolean, onC
         animate={{ opacity: 1, scale: 1 }}
         className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl"
       >
-        <h2 className="text-2xl font-bold mb-6">Request Load</h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-zinc-700 mb-1">Amount (₱)</label>
-            <input 
-              type="number" 
-              value={amount} 
-              onChange={(e) => setAmount(e.target.value)}
-              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-              placeholder="0.00"
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-700 mb-1">Payment Method</label>
-            <select 
-              value={method} 
-              onChange={(e) => setMethod(e.target.value)}
-              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="Gcash">Gcash</option>
-              <option value="Over-the-Counter">Over-the-Counter</option>
-              <option value="Bank Transfer">Bank Transfer</option>
-            </select>
-          </div>
-          <div className="flex gap-3 pt-4">
+        {!requestId ? (
+          <>
+            <h2 className="text-2xl font-bold mb-6">Request Load</h2>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">Amount (₱)</label>
+                <input 
+                  type="number" 
+                  value={amount} 
+                  onChange={(e) => setAmount(e.target.value)}
+                  className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="0.00"
+                  required
+                />
+              </div>
+              <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl">
+                <p className="text-xs text-indigo-600 font-bold uppercase tracking-wider mb-1">Payment Method</p>
+                <p className="text-sm font-medium text-indigo-900">Cashier Over-the-Counter</p>
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button 
+                  type="button" 
+                  onClick={handleClose}
+                  className="flex-1 py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 font-bold rounded-xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={loading}
+                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-100 transition-colors disabled:opacity-50"
+                >
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Generate QR'}
+                </button>
+              </div>
+            </form>
+          </>
+        ) : (
+          <div className="text-center">
+            <div className="flex justify-center mb-6">
+              <div className="p-4 bg-white border-4 border-indigo-600 rounded-3xl shadow-xl">
+                <QRCodeCanvas value={requestId} size={200} />
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold text-zinc-900 mb-2">Request Generated</h2>
+            <p className="text-zinc-500 mb-6 text-sm">Present this QR code to the cashier to process your load of ₱{parseFloat(amount).toLocaleString()}.</p>
+            <div className="bg-zinc-50 p-3 rounded-xl mb-6 flex items-center justify-center gap-2">
+              <span className="text-xs font-mono text-zinc-400">ID: {requestId}</span>
+            </div>
             <button 
-              type="button" 
-              onClick={onClose}
-              className="flex-1 py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 font-bold rounded-xl transition-colors"
+              onClick={handleClose}
+              className="w-full py-4 bg-zinc-900 hover:bg-black text-white font-bold rounded-2xl transition-colors"
             >
-              Cancel
-            </button>
-            <button 
-              type="submit" 
-              disabled={loading}
-              className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-100 transition-colors disabled:opacity-50"
-            >
-              {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Submit Request'}
+              Done
             </button>
           </div>
-        </form>
+        )}
       </motion.div>
     </div>
   );
@@ -351,6 +374,79 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
+  // QR Request Processing
+  const [qrRequestId, setQrRequestId] = useState('');
+  const [pendingRequest, setPendingRequest] = useState<{ id: string, student: UserProfile, request: LoadRequest } | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+
+  const handleFetchRequest = async () => {
+    if (!qrRequestId) return;
+    setQrLoading(true);
+    setStatus(null);
+    try {
+      const requestDoc = await getDoc(doc(db, 'load_requests', qrRequestId));
+      if (!requestDoc.exists()) throw new Error('Request not found');
+      
+      const requestData = requestDoc.data() as LoadRequest;
+      if (requestData.status !== 'pending') throw new Error('Request already processed');
+
+      const studentDoc = await getDoc(doc(db, 'users', requestData.studentId));
+      if (!studentDoc.exists()) throw new Error('Student profile not found');
+
+      setPendingRequest({
+        id: requestDoc.id,
+        student: studentDoc.data() as UserProfile,
+        request: requestData
+      });
+    } catch (err: any) {
+      console.error(err);
+      setStatus({ type: 'error', message: err.message || 'Failed to fetch request' });
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  const handleApproveRequest = async () => {
+    if (!pendingRequest) return;
+    setLoading(true);
+    try {
+      await runTransaction(db, async (transaction) => {
+        const studentRef = doc(db, 'users', pendingRequest.student.uid);
+        const requestRef = doc(db, 'load_requests', pendingRequest.id);
+        
+        const sDoc = await transaction.get(studentRef);
+        const rDoc = await transaction.get(requestRef);
+
+        if (!sDoc.exists() || !rDoc.exists()) throw new Error("Document missing");
+        if (rDoc.data().status !== 'pending') throw new Error("Already approved");
+
+        const newBalance = (sDoc.data().balance || 0) + pendingRequest.request.amount;
+        
+        transaction.update(studentRef, { balance: newBalance });
+        transaction.update(requestRef, { status: 'approved' });
+
+        const transRef = doc(collection(db, 'transactions'));
+        transaction.set(transRef, {
+          studentId: pendingRequest.student.uid,
+          cashierId: profile.uid,
+          amount: pendingRequest.request.amount,
+          type: 'load',
+          timestamp: new Date().toISOString(),
+          description: `QR Load approved by ${profile.displayName}`
+        });
+      });
+
+      setStatus({ type: 'success', message: `Approved ₱${pendingRequest.request.amount} for ${pendingRequest.student.displayName}` });
+      setPendingRequest(null);
+      setQrRequestId('');
+    } catch (err: any) {
+      console.error(err);
+      setStatus({ type: 'error', message: err.message || 'Approval failed' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLoadBalance = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!studentId || !amount || parseFloat(amount) <= 0) return;
@@ -448,6 +544,80 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
                 </div>
               </div>
 
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CreditCard className="w-5 h-5" />}
+                Process Manual Payment
+              </button>
+            </form>
+          </motion.div>
+
+          {/* QR Request Section */}
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+            className="bg-white rounded-3xl p-8 border border-zinc-100 shadow-sm"
+          >
+            <h2 className="text-xl font-bold text-zinc-900 mb-6 flex items-center gap-2">
+              <QrCode className="text-indigo-600 w-6 h-6" />
+              Process QR Request
+            </h2>
+
+            <div className="space-y-6">
+              {!pendingRequest ? (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={qrRequestId}
+                    onChange={(e) => setQrRequestId(e.target.value)}
+                    placeholder="Enter Request ID from QR"
+                    className="flex-1 px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                  <button
+                    onClick={handleFetchRequest}
+                    disabled={qrLoading || !qrRequestId}
+                    className="px-6 bg-zinc-900 hover:bg-black text-white font-bold rounded-xl transition-all disabled:opacity-50"
+                  >
+                    {qrLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Fetch'}
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-indigo-50 rounded-2xl p-6 border border-indigo-100">
+                  <div className="flex justify-between items-start mb-6">
+                    <div>
+                      <p className="text-xs text-indigo-600 font-bold uppercase tracking-wider mb-1">Student Name</p>
+                      <p className="text-xl font-bold text-indigo-900">{pendingRequest.student.displayName}</p>
+                      <p className="text-sm text-indigo-500">{pendingRequest.student.studentId}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-indigo-600 font-bold uppercase tracking-wider mb-1">Requested Amount</p>
+                      <p className="text-3xl font-black text-indigo-900">₱{pendingRequest.request.amount.toLocaleString()}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setPendingRequest(null)}
+                      className="flex-1 py-3 bg-white text-zinc-600 font-bold rounded-xl border border-indigo-100 hover:bg-indigo-100/50 transition-all"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleApproveRequest}
+                      disabled={loading}
+                      className="flex-2 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />}
+                      Approve & Load
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {status && (
                 <motion.div 
                   initial={{ opacity: 0, height: 0 }}
@@ -461,16 +631,7 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
                   {status.message}
                 </motion.div>
               )}
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CreditCard className="w-5 h-5" />}
-                Process Payment
-              </button>
-            </form>
+            </div>
           </motion.div>
         </div>
 
