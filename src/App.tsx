@@ -45,7 +45,13 @@ import {
   Loader2,
   Search,
   QrCode,
-  Check
+  Check,
+  Users,
+  BarChart,
+  ArrowUpRight,
+  ArrowDownLeft,
+  XCircle,
+  Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -457,26 +463,102 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
   const [pendingRequests, setPendingRequests] = useState<LoadRequest[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(true);
 
+  // Summary Stats
+  const [stats, setStats] = useState({ pending: 0, total: 0 });
+
+  // Student Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+
+  // Global Transaction History
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
+
   useEffect(() => {
     console.log('Initializing Cashier Dashboard for:', profile.uid);
-    const q = query(
+    
+    // Pending Requests listener
+    const qPending = query(
       collection(db, 'load_requests'),
       where('status', '==', 'pending'),
       orderBy('createdAt', 'desc')
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubPending = onSnapshot(qPending, (snapshot) => {
       const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LoadRequest));
-      console.log('Fetched Requests:', requests);
       setPendingRequests(requests);
-      setRequestsLoading(false);
-    }, (error) => {
-      console.error('Requests Subscription Error:', error);
+      setStats(prev => ({ ...prev, pending: requests.length }));
       setRequestsLoading(false);
     });
 
-    return () => unsubscribe();
+    // Total Requests listener (to get total count)
+    const qTotal = query(collection(db, 'load_requests'));
+    const unsubTotal = onSnapshot(qTotal, (snapshot) => {
+      setStats(prev => ({ ...prev, total: snapshot.size }));
+    });
+
+    // Global Transactions listener
+    const qTrans = query(
+      collection(db, 'transactions'),
+      orderBy('timestamp', 'desc'),
+      limit(20)
+    );
+    const unsubTrans = onSnapshot(qTrans, (snapshot) => {
+      const trans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
+      setAllTransactions(trans);
+    });
+
+    return () => {
+      unsubPending();
+      unsubTotal();
+      unsubTrans();
+    };
   }, [profile.uid]);
+
+  // Handle Student Search
+  useEffect(() => {
+    const searchStudents = async () => {
+      if (searchQuery.length < 3) {
+        setSearchResults([]);
+        return;
+      }
+      setSearchLoading(true);
+      try {
+        // Search by Student ID
+        const qId = query(
+          collection(db, 'users'),
+          where('role', '==', 'student'),
+          where('studentId', '>=', searchQuery.toUpperCase()),
+          where('studentId', '<=', searchQuery.toUpperCase() + '\uf8ff'),
+          limit(5)
+        );
+        
+        // Search by Name (Case-sensitive in Firestore, so we'll do a simple prefix)
+        const qName = query(
+          collection(db, 'users'),
+          where('role', '==', 'student'),
+          where('displayName', '>=', searchQuery),
+          where('displayName', '<=', searchQuery + '\uf8ff'),
+          limit(5)
+        );
+        
+        const [snapId, snapName] = await Promise.all([getDocs(qId), getDocs(qName)]);
+        
+        const resultsMap = new Map<string, UserProfile>();
+        snapId.docs.forEach(doc => resultsMap.set(doc.id, doc.data() as UserProfile));
+        snapName.docs.forEach(doc => resultsMap.set(doc.id, doc.data() as UserProfile));
+        
+        setSearchResults(Array.from(resultsMap.values()));
+      } catch (err) {
+        console.error('Search Error:', err);
+      } finally {
+        setSearchLoading(false);
+      }
+    };
+
+    const timeoutId = setTimeout(searchStudents, 500);
+    return () => clearTimeout(timeoutId);
+  }, [searchQuery]);
 
   const handleFetchRequest = async (id?: string) => {
     const targetId = id || qrRequestId;
@@ -575,7 +657,7 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
     try {
       // Find student by studentId
       const q = query(collection(db, 'users'), where('studentId', '==', studentId), limit(1));
-      const querySnapshot = await getDocs(q); // Need to import getDocs
+      const querySnapshot = await getDocs(q);
 
       if (querySnapshot.empty) {
         throw new Error('Student ID not found');
@@ -618,188 +700,309 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto py-8 px-4">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="md:col-span-2 space-y-6">
-          <motion.div 
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-3xl p-8 border border-zinc-100 shadow-sm"
-          >
-            <h2 className="text-xl font-bold text-zinc-900 mb-6 flex items-center gap-2">
-              <PlusCircle className="text-indigo-600 w-6 h-6" />
-              Load Student Balance
-            </h2>
+    <div className="max-w-6xl mx-auto py-8 px-4 space-y-8">
+      {/* Summary Stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white p-6 rounded-3xl border border-zinc-100 shadow-sm flex items-center gap-4"
+        >
+          <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center">
+            <Clock className="w-6 h-6 text-indigo-600" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Pending Requests</p>
+            <p className="text-2xl font-black text-zinc-900">{stats.pending}</p>
+          </div>
+        </motion.div>
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="bg-white p-6 rounded-3xl border border-zinc-100 shadow-sm flex items-center gap-4"
+        >
+          <div className="w-12 h-12 bg-zinc-50 rounded-2xl flex items-center justify-center">
+            <BarChart className="w-6 h-6 text-zinc-600" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Total Requests</p>
+            <p className="text-2xl font-black text-zinc-900">{stats.total}</p>
+          </div>
+        </motion.div>
+      </div>
 
-            <form onSubmit={handleLoadBalance} className="space-y-6">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-zinc-700">Student ID</label>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-8">
+          {/* Main Actions */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white rounded-3xl p-8 border border-zinc-100 shadow-sm"
+            >
+              <h2 className="text-xl font-bold text-zinc-900 mb-6 flex items-center gap-2">
+                <PlusCircle className="text-indigo-600 w-6 h-6" />
+                Manual Load
+              </h2>
+
+              <form onSubmit={handleLoadBalance} className="space-y-6">
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-zinc-700">Student ID</label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                      <input
+                        type="text"
+                        value={studentId}
+                        onChange={(e) => setStudentId(e.target.value.toUpperCase())}
+                        placeholder="e.g. STU-123456"
+                        className="w-full pl-10 pr-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-zinc-700">Amount (₱)</label>
                     <input
-                      type="text"
-                      value={studentId}
-                      onChange={(e) => setStudentId(e.target.value.toUpperCase())}
-                      placeholder="e.g. STU-123456"
-                      className="w-full pl-10 pr-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all outline-none"
+                      type="number"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      placeholder="0.00"
+                      step="0.01"
+                      min="1"
+                      className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
                       required
                     />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-zinc-700">Amount (₱)</label>
-                  <input
-                    type="number"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                    placeholder="0.00"
-                    step="0.01"
-                    min="1"
-                    className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all outline-none"
-                    required
-                  />
-                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CreditCard className="w-5 h-5" />}
+                  Load Balance
+                </button>
+              </form>
+            </motion.div>
+
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="bg-white rounded-3xl p-8 border border-zinc-100 shadow-sm"
+            >
+              <h2 className="text-xl font-bold text-zinc-900 mb-6 flex items-center gap-2">
+                <QrCode className="text-indigo-600 w-6 h-6" />
+                QR Processing
+              </h2>
+
+              <div className="space-y-6">
+                {!pendingRequest ? (
+                  <div className="space-y-4">
+                    <input
+                      type="text"
+                      value={qrRequestId}
+                      onChange={(e) => setQrRequestId(e.target.value)}
+                      placeholder="Enter Request ID"
+                      className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                    <button
+                      onClick={() => handleFetchRequest()}
+                      disabled={qrLoading || !qrRequestId}
+                      className="w-full py-4 bg-zinc-900 hover:bg-black text-white font-bold rounded-2xl transition-all disabled:opacity-50"
+                    >
+                      {qrLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Fetch Request'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="bg-indigo-50 rounded-2xl p-6 border border-indigo-100">
+                    <div className="space-y-4 mb-6">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">Student</p>
+                        <p className="text-lg font-bold text-indigo-900">{pendingRequest.student.displayName}</p>
+                        <p className="text-xs text-indigo-500">{pendingRequest.student.studentId}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">Amount</p>
+                        <p className="text-3xl font-black text-indigo-900">₱{pendingRequest.request.amount.toLocaleString()}</p>
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleDisapproveRequest}
+                        disabled={loading}
+                        className="flex-1 py-3 bg-white text-red-600 font-bold rounded-xl border border-red-100 hover:bg-red-50 transition-all disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        onClick={handleApproveRequest}
+                        disabled={loading}
+                        className="flex-2 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                      >
+                        {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />}
+                        Approve
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
+            </motion.div>
+          </div>
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CreditCard className="w-5 h-5" />}
-                Process Manual Payment
-              </button>
-            </form>
-          </motion.div>
-
-          {/* QR Request Section */}
+          {/* Global Transaction History */}
           <motion.div 
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
+            transition={{ delay: 0.2 }}
             className="bg-white rounded-3xl p-8 border border-zinc-100 shadow-sm"
           >
-            <h2 className="text-xl font-bold text-zinc-900 mb-6 flex items-center gap-2">
-              <QrCode className="text-indigo-600 w-6 h-6" />
-              Process QR Request
-            </h2>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-zinc-900 flex items-center gap-2">
+                <History className="text-indigo-600 w-6 h-6" />
+                Recent Transactions
+              </h2>
+            </div>
 
-            <div className="space-y-6">
-              {!pendingRequest ? (
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={qrRequestId}
-                    onChange={(e) => setQrRequestId(e.target.value)}
-                    placeholder="Enter Request ID from QR"
-                    className="flex-1 px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
-                  <button
-                    onClick={handleFetchRequest}
-                    disabled={qrLoading || !qrRequestId}
-                    className="px-6 bg-zinc-900 hover:bg-black text-white font-bold rounded-xl transition-all disabled:opacity-50"
-                  >
-                    {qrLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Fetch'}
-                  </button>
+            <div className="space-y-4">
+              {allTransactions.length === 0 ? (
+                <div className="py-12 text-center">
+                  <History className="w-12 h-12 text-zinc-100 mx-auto mb-4" />
+                  <p className="text-zinc-400 text-sm">No transactions recorded yet</p>
                 </div>
               ) : (
-                <div className="bg-indigo-50 rounded-2xl p-6 border border-indigo-100">
-                  <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <p className="text-xs text-indigo-600 font-bold uppercase tracking-wider mb-1">Student Name</p>
-                      <p className="text-xl font-bold text-indigo-900">{pendingRequest.student.displayName}</p>
-                      <p className="text-sm text-indigo-500">{pendingRequest.student.studentId}</p>
+                allTransactions.map(tx => (
+                  <div key={tx.id} className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                    <div className="flex items-center gap-4">
+                      <div className={cn(
+                        "w-10 h-10 rounded-xl flex items-center justify-center",
+                        tx.type === 'load' ? "bg-green-100 text-green-600" : "bg-indigo-100 text-indigo-600"
+                      )}>
+                        {tx.type === 'load' ? <ArrowUpRight className="w-5 h-5" /> : <ArrowDownLeft className="w-5 h-5" />}
+                      </div>
+                      <div>
+                        <p className="font-bold text-zinc-900">{tx.description}</p>
+                        <p className="text-xs text-zinc-500">{format(new Date(tx.timestamp), 'MMM dd, yyyy • hh:mm a')}</p>
+                      </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-xs text-indigo-600 font-bold uppercase tracking-wider mb-1">Requested Amount</p>
-                      <p className="text-3xl font-black text-indigo-900">₱{pendingRequest.request.amount.toLocaleString()}</p>
+                      <p className={cn(
+                        "font-black text-lg",
+                        tx.type === 'load' ? "text-green-600" : "text-indigo-600"
+                      )}>
+                        {tx.type === 'load' ? '+' : '-'}₱{tx.amount.toLocaleString()}
+                      </p>
+                      <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Amount</p>
                     </div>
                   </div>
-                  
-                  <div className="flex gap-3">
-                    <button
-                      onClick={handleDisapproveRequest}
-                      disabled={loading}
-                      className="flex-1 py-3 bg-red-50 text-red-600 font-bold rounded-xl border border-red-100 hover:bg-red-100 transition-all disabled:opacity-50"
-                    >
-                      Disapprove
-                    </button>
-                    <button
-                      onClick={handleApproveRequest}
-                      disabled={loading}
-                      className="flex-2 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                    >
-                      {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />}
-                      Approve & Load
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Pending Requests List */}
-              <div className="mt-8">
-                <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">Pending Requests</h3>
-                <div className="space-y-3">
-                  {requestsLoading ? (
-                    <div className="py-8 flex justify-center">
-                      <Loader2 className="w-6 h-6 animate-spin text-zinc-300" />
-                    </div>
-                  ) : pendingRequests.filter(r => new Date(r.expiryDate) > new Date()).length === 0 ? (
-                    <p className="text-zinc-400 text-sm italic">No active pending requests</p>
-                  ) : (
-                    pendingRequests
-                      .filter(r => new Date(r.expiryDate) > new Date())
-                      .map(req => (
-                        <div key={req.id} className="p-4 bg-zinc-50 rounded-2xl flex items-center justify-between border border-zinc-100">
-                          <div>
-                            <p className="font-bold text-zinc-900">{req.studentName}</p>
-                            <p className="text-xs text-zinc-500">₱{req.amount.toLocaleString()} • Requested {format(new Date(req.createdAt), 'MMM dd')}</p>
-                          </div>
-                          <button 
-                            onClick={() => handleFetchRequest(req.id)}
-                            className="text-indigo-600 text-sm font-bold hover:underline"
-                          >
-                            Process
-                          </button>
-                        </div>
-                      ))
-                  )}
-                </div>
-              </div>
-
-              {status && (
-                <motion.div 
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  className={cn(
-                    "p-4 rounded-xl flex items-center gap-3 text-sm",
-                    status.type === 'success' ? "bg-green-50 text-green-700 border border-green-100" : "bg-red-50 text-red-700 border border-red-100"
-                  )}
-                >
-                  {status.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
-                  {status.message}
-                </motion.div>
+                ))
               )}
             </div>
           </motion.div>
         </div>
 
-        <div className="space-y-6">
-          <div className="bg-indigo-600 rounded-3xl p-6 text-white shadow-xl shadow-indigo-100">
-            <p className="text-indigo-100 text-sm font-medium mb-1">Cashier Session</p>
-            <h3 className="text-lg font-bold mb-4">{profile.displayName}</h3>
-            <div className="space-y-3">
-              <div className="flex justify-between text-sm">
-                <span className="text-indigo-200">Role</span>
-                <span className="font-medium">Official Cashier</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-indigo-200">Terminal</span>
-                <span className="font-medium">#001-MAIN</span>
-              </div>
+        <div className="space-y-8">
+          {/* Student Search */}
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="bg-white rounded-3xl p-6 border border-zinc-100 shadow-sm"
+          >
+            <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">Student Search</h3>
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search Name or ID..."
+                className="w-full pl-10 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              />
             </div>
-          </div>
+
+            <div className="space-y-3">
+              {searchLoading ? (
+                <div className="py-4 flex justify-center">
+                  <Loader2 className="w-5 h-5 animate-spin text-zinc-300" />
+                </div>
+              ) : searchQuery.length > 0 && searchQuery.length < 3 ? (
+                <p className="text-[10px] text-zinc-400 text-center">Type at least 3 characters</p>
+              ) : searchResults.length === 0 && searchQuery.length >= 3 ? (
+                <p className="text-[10px] text-zinc-400 text-center">No students found</p>
+              ) : (
+                searchResults.map(student => (
+                  <button
+                    key={student.uid}
+                    onClick={() => setStudentId(student.studentId || '')}
+                    className="w-full p-3 bg-zinc-50 hover:bg-indigo-50 rounded-xl border border-zinc-100 transition-colors text-left group"
+                  >
+                    <p className="font-bold text-zinc-900 text-sm group-hover:text-indigo-600 transition-colors">{student.displayName}</p>
+                    <p className="text-[10px] text-zinc-500">{student.studentId} • Balance: ₱{student.balance.toLocaleString()}</p>
+                  </button>
+                ))
+              )}
+            </div>
+          </motion.div>
+
+          {/* Active Pending Requests */}
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.1 }}
+            className="bg-white rounded-3xl p-6 border border-zinc-100 shadow-sm"
+          >
+            <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">Live Requests</h3>
+            <div className="space-y-3">
+              {requestsLoading ? (
+                <div className="py-8 flex justify-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-zinc-300" />
+                </div>
+              ) : pendingRequests.filter(r => new Date(r.expiryDate) > new Date()).length === 0 ? (
+                <div className="py-8 text-center">
+                  <Clock className="w-8 h-8 text-zinc-100 mx-auto mb-2" />
+                  <p className="text-zinc-400 text-xs">No active requests</p>
+                </div>
+              ) : (
+                pendingRequests
+                  .filter(r => new Date(r.expiryDate) > new Date())
+                  .map(req => (
+                    <div key={req.id} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 group hover:border-indigo-200 transition-all">
+                      <div className="flex justify-between items-start mb-2">
+                        <p className="font-bold text-zinc-900 text-sm">{req.studentName}</p>
+                        <p className="text-indigo-600 font-black text-sm">₱{req.amount.toLocaleString()}</p>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-[10px] text-zinc-400">{format(new Date(req.createdAt), 'MMM dd, hh:mm a')}</p>
+                        <button 
+                          onClick={() => handleFetchRequest(req.id)}
+                          className="text-[10px] font-black text-indigo-600 uppercase tracking-widest hover:underline"
+                        >
+                          Process
+                        </button>
+                      </div>
+                    </div>
+                  ))
+              )}
+            </div>
+          </motion.div>
+
+          {status && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className={cn(
+                "p-4 rounded-2xl flex items-center gap-3 text-sm shadow-lg",
+                status.type === 'success' ? "bg-green-600 text-white" : "bg-red-600 text-white"
+              )}
+            >
+              {status.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+              <p className="font-bold">{status.message}</p>
+            </motion.div>
+          )}
         </div>
       </div>
     </div>
@@ -952,7 +1155,7 @@ const StudentDashboard = ({ profile }: { profile: UserProfile }) => {
       <div className="space-y-4">
         <h3 className="text-xl font-bold text-zinc-900 flex items-center gap-2 px-2">
           <History className="w-6 h-6 text-zinc-400" />
-          Recent Transactions
+          Transaction History
         </h3>
 
         <div className="bg-white rounded-3xl border border-zinc-100 shadow-sm overflow-hidden">
@@ -974,19 +1177,19 @@ const StudentDashboard = ({ profile }: { profile: UserProfile }) => {
                   <div className="flex items-center gap-4">
                     <div className={cn(
                       "w-12 h-12 rounded-2xl flex items-center justify-center",
-                      tx.type === 'load' ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600"
+                      tx.type === 'load' ? "bg-green-50 text-green-600" : "bg-indigo-50 text-indigo-600"
                     )}>
-                      {tx.type === 'load' ? <PlusCircle className="w-6 h-6" /> : <CreditCard className="w-6 h-6" />}
+                      {tx.type === 'load' ? <ArrowUpRight className="w-6 h-6" /> : <ArrowDownLeft className="w-6 h-6" />}
                     </div>
                     <div>
-                      <p className="font-bold text-zinc-900">{tx.type === 'load' ? 'Balance Loaded' : 'Payment Made'}</p>
+                      <p className="font-bold text-zinc-900">{tx.description || (tx.type === 'load' ? 'Balance Loaded' : 'Payment Made')}</p>
                       <p className="text-xs text-zinc-400">{format(new Date(tx.timestamp), 'MMM dd, yyyy • hh:mm a')}</p>
                     </div>
                   </div>
                   <div className="text-right">
                     <p className={cn(
-                      "text-lg font-black",
-                      tx.type === 'load' ? "text-green-600" : "text-zinc-900"
+                      "text-xl font-black",
+                      tx.type === 'load' ? "text-green-600" : "text-indigo-600"
                     )}>
                       {tx.type === 'load' ? '+' : '-'}₱{tx.amount.toLocaleString()}
                     </p>
