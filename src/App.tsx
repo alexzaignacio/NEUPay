@@ -23,7 +23,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { UserProfile, Transaction, UserRole } from './types';
+import { UserProfile, Transaction, UserRole, TopupRequest, Fee } from './types';
 import { 
   LayoutDashboard, 
   Wallet, 
@@ -48,6 +48,181 @@ function cn(...inputs: ClassValue[]) {
 }
 
 // --- Components ---
+
+const RequestLoadModal = ({ isOpen, onClose, studentId }: { isOpen: boolean, onClose: () => void, studentId: string }) => {
+  const [amount, setAmount] = useState('');
+  const [method, setMethod] = useState('Gcash');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!amount || parseFloat(amount) <= 0) return;
+
+    setLoading(true);
+    try {
+      await addDoc(collection(db, 'topup_requests'), {
+        studentId,
+        amount: parseFloat(amount),
+        method,
+        status: 'pending',
+        timestamp: new Date().toISOString()
+      });
+      onClose();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl"
+      >
+        <h2 className="text-2xl font-bold mb-6">Request Load</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-zinc-700 mb-1">Amount (₱)</label>
+            <input 
+              type="number" 
+              value={amount} 
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="0.00"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-zinc-700 mb-1">Payment Method</label>
+            <select 
+              value={method} 
+              onChange={(e) => setMethod(e.target.value)}
+              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="Gcash">Gcash</option>
+              <option value="Over-the-Counter">Over-the-Counter</option>
+              <option value="Bank Transfer">Bank Transfer</option>
+            </select>
+          </div>
+          <div className="flex gap-3 pt-4">
+            <button 
+              type="button" 
+              onClick={onClose}
+              className="flex-1 py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 font-bold rounded-xl transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit" 
+              disabled={loading}
+              className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-100 transition-colors disabled:opacity-50"
+            >
+              {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Submit Request'}
+            </button>
+          </div>
+        </form>
+      </motion.div>
+    </div>
+  );
+};
+
+const PayFeesModal = ({ isOpen, onClose, profile }: { isOpen: boolean, onClose: () => void, profile: UserProfile }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fees: Fee[] = [
+    { id: 'tuition', name: 'Tuition Fee', amount: 5000 },
+    { id: 'lab', name: 'Laboratory Fee', amount: 1500 },
+    { id: 'misc', name: 'Miscellaneous Fee', amount: 800 },
+  ];
+
+  const handlePay = async (fee: Fee) => {
+    if (profile.balance < fee.amount) {
+      setError('Insufficient balance');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      await runTransaction(db, async (transaction) => {
+        const userRef = doc(db, 'users', profile.uid);
+        const userDoc = await transaction.get(userRef);
+        
+        if (!userDoc.exists()) throw new Error("User not found");
+        
+        const currentBalance = userDoc.data().balance || 0;
+        if (currentBalance < fee.amount) {
+          throw new Error("Insufficient balance");
+        }
+
+        transaction.update(userRef, { balance: currentBalance - fee.amount });
+
+        const transRef = doc(collection(db, 'transactions'));
+        transaction.set(transRef, {
+          studentId: profile.uid,
+          amount: fee.amount,
+          type: 'payment',
+          timestamp: new Date().toISOString(),
+          description: `Paid ${fee.name}`
+        });
+      });
+      onClose();
+    } catch (err: any) {
+      setError(err.message || 'Payment failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl"
+      >
+        <h2 className="text-2xl font-bold mb-6">Pay School Fees</h2>
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-xl flex items-center gap-2">
+            <AlertCircle className="w-4 h-4" />
+            {error}
+          </div>
+        )}
+        <div className="space-y-3">
+          {fees.map(fee => (
+            <div key={fee.id} className="p-4 border border-zinc-100 rounded-2xl flex items-center justify-between hover:bg-zinc-50 transition-colors">
+              <div>
+                <p className="font-bold text-zinc-900">{fee.name}</p>
+                <p className="text-sm text-zinc-500">₱{fee.amount.toLocaleString()}</p>
+              </div>
+              <button 
+                onClick={() => handlePay(fee)}
+                disabled={loading}
+                className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50"
+              >
+                Pay
+              </button>
+            </div>
+          ))}
+        </div>
+        <button 
+          onClick={onClose}
+          className="w-full mt-6 py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 font-bold rounded-xl transition-colors"
+        >
+          Close
+        </button>
+      </motion.div>
+    </div>
+  );
+};
 
 const LoadingScreen = () => (
   <div className="fixed inset-0 bg-zinc-50 flex items-center justify-center z-50">
@@ -104,7 +279,7 @@ const AuthScreen = ({ onRoleSelect }: { onRoleSelect: (role: UserRole) => void }
     }
   };
 
- return (
+  return (
     <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-6">
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
@@ -112,12 +287,9 @@ const AuthScreen = ({ onRoleSelect }: { onRoleSelect: (role: UserRole) => void }
         className="w-full max-w-md bg-white rounded-3xl shadow-xl shadow-indigo-100/50 p-8 border border-zinc-100"
       >
         <div className="flex flex-col items-center mb-8">
-          <img 
-            src="https://raw.githubusercontent.com/shinramyeon22/Software_Engineering_2_PROJECT/main/NEULogo.jpg" 
-            alt="NEU Logo" 
-            className="w-24 h-24 object-contain mb-4 rounded-2xl shadow-lg shadow-indigo-100"
-            referrerPolicy="no-referrer"
-          />
+          <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-indigo-200">
+            <CreditCard className="text-white w-8 h-8" />
+          </div>
           <h1 className="text-3xl font-bold text-zinc-900 tracking-tight">EduPay</h1>
           <p className="text-zinc-500 mt-2">Secure School Payment System</p>
         </div>
@@ -326,13 +498,15 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
 const StudentDashboard = ({ profile }: { profile: UserProfile }) => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isLoadModalOpen, setIsLoadModalOpen] = useState(false);
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
 
   useEffect(() => {
     const q = query(
       collection(db, 'transactions'),
       where('studentId', '==', profile.uid),
       orderBy('timestamp', 'desc'),
-      limit(20)
+      limit(5)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -366,15 +540,32 @@ const StudentDashboard = ({ profile }: { profile: UserProfile }) => {
             </div>
           </div>
           <div className="flex gap-4">
-            <button className="bg-white text-indigo-600 px-6 py-3 rounded-2xl font-bold text-sm hover:bg-indigo-50 transition-colors">
+            <button 
+              onClick={() => setIsLoadModalOpen(true)}
+              className="bg-white text-indigo-600 px-6 py-3 rounded-2xl font-bold text-sm hover:bg-indigo-50 transition-colors"
+            >
               Request Load
             </button>
-            <button className="bg-indigo-500 text-white px-6 py-3 rounded-2xl font-bold text-sm hover:bg-indigo-400 transition-colors">
+            <button 
+              onClick={() => setIsPayModalOpen(true)}
+              className="bg-indigo-500 text-white px-6 py-3 rounded-2xl font-bold text-sm hover:bg-indigo-400 transition-colors"
+            >
               Pay Fees
             </button>
           </div>
         </div>
       </motion.div>
+
+      <RequestLoadModal 
+        isOpen={isLoadModalOpen} 
+        onClose={() => setIsLoadModalOpen(false)} 
+        studentId={profile.uid} 
+      />
+      <PayFeesModal 
+        isOpen={isPayModalOpen} 
+        onClose={() => setIsPayModalOpen(false)} 
+        profile={profile} 
+      />
 
       {/* Transaction History */}
       <div className="space-y-4">
@@ -464,18 +655,15 @@ export default function App() {
     return <AuthScreen onRoleSelect={() => {}} />;
   }
 
-return (
+  return (
     <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900">
       {/* Navigation */}
       <nav className="bg-white border-b border-zinc-100 sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 h-20 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img 
-              src="https://raw.githubusercontent.com/shinramyeon22/Software_Engineering_2_PROJECT/main/NEULogo.jpg" 
-              alt="NEU Logo" 
-              className="w-12 h-12 object-contain rounded-xl shadow-md shadow-indigo-50"
-              referrerPolicy="no-referrer"
-            />
+            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-100">
+              <CreditCard className="text-white w-5 h-5" />
+            </div>
             <span className="text-xl font-black tracking-tighter text-zinc-900">EduPay</span>
           </div>
 

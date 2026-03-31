@@ -12,9 +12,24 @@ export interface UserProfile {
 export interface Transaction {
   id?: string;
   studentId: string;
-  cashierId: string;
+  cashierId?: string;
   amount: number;
   type: 'load' | 'payment';
   timestamp: string;
   description?: string;
+}
+
+export interface TopupRequest {
+  id?: string;
+  studentId: string;
+  amount: number;
+  method: string;
+  status: 'pending' | 'approved' | 'rejected';
+  timestamp: string;
+}
+
+export interface Fee {
+  id: string;
+  name: string;
+  amount: number;
 }

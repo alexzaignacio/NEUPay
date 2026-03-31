@@ -20,13 +20,26 @@
       "type": "object",
       "properties": {
         "studentId": { "type": "string", "description": "The student receiving or paying" },
-        "cashierId": { "type": "string", "description": "The cashier who processed the load" },
+        "cashierId": { "type": "string", "description": "The cashier who processed the load (optional for payments)" },
         "amount": { "type": "number" },
         "type": { "type": "string", "enum": ["load", "payment"] },
         "timestamp": { "type": "string", "format": "date-time" },
         "description": { "type": "string" }
       },
       "required": ["studentId", "amount", "type", "timestamp"]
+    },
+    "TopupRequest": {
+      "title": "Top-up Request",
+      "description": "Requests from students to load their balance.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string" },
+        "amount": { "type": "number" },
+        "method": { "type": "string", "enum": ["Gcash", "Over-the-Counter", "Bank Transfer"] },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentId", "amount", "method", "status", "timestamp"]
     }
   },
   "firestore": {
@@ -37,6 +50,10 @@
     "/transactions/{transactionId}": {
       "schema": "Transaction",
       "description": "Financial ledger"
+    },
+    "/topup_requests/{requestId}": {
+      "schema": "TopupRequest",
+      "description": "Pending and historical top-up requests"
     }
   }
 }
