@@ -22,6 +22,14 @@ import {
   Timestamp,
   getDocs
 } from 'firebase/firestore';
+import { 
+  BrowserRouter, 
+  Routes, 
+  Route, 
+  Navigate, 
+  useLocation,
+  useNavigate
+} from 'react-router-dom';
 import { auth, db } from './firebase';
 import { UserProfile, Transaction, UserRole, TopupRequest, Fee, LoadRequest } from './types';
 import { 
@@ -394,8 +402,10 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
 
   // Real-time Pending Requests List
   const [pendingRequests, setPendingRequests] = useState<LoadRequest[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(true);
 
   useEffect(() => {
+    console.log('Initializing Cashier Dashboard for:', profile.uid);
     const q = query(
       collection(db, 'load_requests'),
       where('status', '==', 'pending'),
@@ -404,23 +414,34 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LoadRequest));
+      console.log('Fetched Requests:', requests);
       setPendingRequests(requests);
+      setRequestsLoading(false);
+    }, (error) => {
+      console.error('Requests Subscription Error:', error);
+      setRequestsLoading(false);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [profile.uid]);
 
   const handleFetchRequest = async (id?: string) => {
     const targetId = id || qrRequestId;
     if (!targetId) return;
     setQrLoading(true);
     setStatus(null);
+    console.log('Fetching Request ID:', targetId);
     try {
       const requestDoc = await getDoc(doc(db, 'load_requests', targetId));
       if (!requestDoc.exists()) throw new Error('Request not found');
       
       const requestData = requestDoc.data() as LoadRequest;
       if (requestData.status !== 'pending') throw new Error('Request already processed');
+
+      // Expiry check
+      if (new Date(requestData.expiryDate) < new Date()) {
+        throw new Error('This request has expired (14-day limit)');
+      }
 
       const studentDoc = await getDoc(doc(db, 'users', requestData.studentId));
       if (!studentDoc.exists()) throw new Error('Student profile not found');
@@ -430,8 +451,9 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
         student: studentDoc.data() as UserProfile,
         request: requestData
       });
+      console.log('Request Fetched Successfully:', requestDoc.id);
     } catch (err: any) {
-      console.error(err);
+      console.error('Fetch Request Error:', err);
       setStatus({ type: 'error', message: err.message || 'Failed to fetch request' });
     } finally {
       setQrLoading(false);
@@ -441,6 +463,7 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
   const handleProcessRequest = async (approved: boolean) => {
     if (!pendingRequest) return;
     setLoading(true);
+    console.log(`Processing Transaction: ${approved ? 'APPROVE' : 'DISAPPROVE'} for ${pendingRequest.id}`);
     try {
       await runTransaction(db, async (transaction) => {
         const studentRef = doc(db, 'users', pendingRequest.student.uid);
@@ -471,6 +494,7 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
         }
       });
 
+      console.log('Transaction Status: SUCCESS');
       setStatus({ 
         type: approved ? 'success' : 'error', 
         message: approved ? `Approved ₱${pendingRequest.request.amount} for ${pendingRequest.student.displayName}` : `Disapproved request for ${pendingRequest.student.displayName}`
@@ -478,7 +502,7 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
       setPendingRequest(null);
       setQrRequestId('');
     } catch (err: any) {
-      console.error(err);
+      console.error('Transaction Status: FAILED', err);
       setStatus({ type: 'error', message: err.message || 'Transaction failed' });
     } finally {
       setLoading(false);
@@ -664,7 +688,11 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
               <div className="mt-8">
                 <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">Pending Requests</h3>
                 <div className="space-y-3">
-                  {pendingRequests.filter(r => new Date(r.expiryDate) > new Date()).length === 0 ? (
+                  {requestsLoading ? (
+                    <div className="py-8 flex justify-center">
+                      <Loader2 className="w-6 h-6 animate-spin text-zinc-300" />
+                    </div>
+                  ) : pendingRequests.filter(r => new Date(r.expiryDate) > new Date()).length === 0 ? (
                     <p className="text-zinc-400 text-sm italic">No active pending requests</p>
                   ) : (
                     pendingRequests
@@ -924,19 +952,37 @@ const StudentDashboard = ({ profile }: { profile: UserProfile }) => {
 // --- Main App ---
 
 export default function App() {
+  return (
+    <BrowserRouter>
+      <AppContent />
+    </BrowserRouter>
+  );
+}
+
+function AppContent() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      console.log('Auth User:', firebaseUser ? { uid: firebaseUser.uid, email: firebaseUser.email } : 'None');
       setUser(firebaseUser);
       if (firebaseUser) {
-        // Fetch profile with real-time updates for balance
         const unsubProfile = onSnapshot(doc(db, 'users', firebaseUser.uid), (docSnap) => {
           if (docSnap.exists()) {
-            setProfile(docSnap.data() as UserProfile);
+            const profileData = docSnap.data() as UserProfile;
+            console.log('User Profile Loaded:', profileData);
+            setProfile(profileData);
+          } else {
+            console.warn('No profile found for user:', firebaseUser.uid);
+            setProfile(null);
           }
+          setLoading(false);
+        }, (error) => {
+          console.error('Profile Subscription Error:', error);
           setLoading(false);
         });
         return () => unsubProfile();
@@ -951,8 +997,25 @@ export default function App() {
 
   if (loading) return <LoadingScreen />;
 
-  if (!user || !profile) {
-    return <AuthScreen onRoleSelect={() => {}} />;
+  if (!user) {
+    return (
+      <Routes>
+        <Route path="/login" element={<AuthScreen onRoleSelect={() => {}} />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin text-indigo-600 mx-auto mb-4" />
+          <p className="text-zinc-600 font-bold">Setting up your profile...</p>
+          <button onClick={() => signOut(auth)} className="mt-4 text-indigo-600 font-bold hover:underline">Sign Out</button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -985,19 +1048,63 @@ export default function App() {
 
       {/* Content */}
       <AnimatePresence mode="wait">
-        <motion.main
-          key={profile.role}
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -10 }}
-          transition={{ duration: 0.2 }}
-        >
-          {profile.role === 'cashier' ? (
-            <CashierDashboard profile={profile} />
-          ) : (
-            <StudentDashboard profile={profile} />
-          )}
-        </motion.main>
+        <div key={location.pathname}>
+          <Routes location={location}>
+            <Route 
+              path="/cashier" 
+              element={
+                profile.role === 'cashier' ? (
+                  <motion.main
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <CashierDashboard profile={profile} />
+                  </motion.main>
+                ) : (
+                  <Navigate to="/student" replace />
+                )
+              } 
+            />
+            <Route 
+              path="/student" 
+              element={
+                profile.role === 'student' ? (
+                  <motion.main
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <StudentDashboard profile={profile} />
+                  </motion.main>
+                ) : (
+                  <Navigate to="/cashier" replace />
+                )
+              } 
+            />
+            <Route 
+              path="/" 
+              element={<Navigate to={profile.role === 'cashier' ? "/cashier" : "/student"} replace />} 
+            />
+            <Route 
+              path="*" 
+              element={
+                <div className="flex flex-col items-center justify-center py-20">
+                  <AlertCircle className="w-12 h-12 text-zinc-300 mb-4" />
+                  <h2 className="text-xl font-black text-zinc-900">Page Not Found</h2>
+                  <button 
+                    onClick={() => navigate('/')}
+                    className="mt-4 text-indigo-600 font-bold"
+                  >
+                    Go Back Home
+                  </button>
+                </div>
+              } 
+            />
+          </Routes>
+        </div>
       </AnimatePresence>
 
       <footer className="py-12 text-center">
