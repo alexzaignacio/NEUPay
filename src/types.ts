@@ -31,9 +31,11 @@ export interface TopupRequest {
 export interface LoadRequest {
   id?: string;
   studentId: string;
+  studentName: string;
   amount: number;
-  status: 'pending' | 'approved' | 'rejected';
-  timestamp: string;
+  status: 'pending' | 'approved' | 'disapproved';
+  createdAt: string;
+  expiryDate: string;
 }
 
 export interface Fee {

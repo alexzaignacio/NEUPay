@@ -47,11 +47,13 @@
       "type": "object",
       "properties": {
         "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
         "amount": { "type": "number" },
-        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
-        "timestamp": { "type": "string", "format": "date-time" }
+        "status": { "type": "string", "enum": ["pending", "approved", "disapproved"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiryDate": { "type": "string", "format": "date-time" }
       },
-      "required": ["studentId", "amount", "status", "timestamp"]
+      "required": ["studentId", "studentName", "amount", "status", "createdAt", "expiryDate"]
     }
   },
   "firestore": {

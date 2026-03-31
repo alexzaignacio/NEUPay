@@ -52,10 +52,11 @@ function cn(...inputs: ClassValue[]) {
 
 // --- Components ---
 
-const RequestLoadModal = ({ isOpen, onClose, studentId }: { isOpen: boolean, onClose: () => void, studentId: string }) => {
+const RequestLoadModal = ({ isOpen, onClose, profile }: { isOpen: boolean, onClose: () => void, profile: UserProfile }) => {
   const [amount, setAmount] = useState('');
   const [loading, setLoading] = useState(false);
   const [requestId, setRequestId] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,13 +64,19 @@ const RequestLoadModal = ({ isOpen, onClose, studentId }: { isOpen: boolean, onC
 
     setLoading(true);
     try {
+      const now = new Date();
+      const expiry = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+      
       const docRef = await addDoc(collection(db, 'load_requests'), {
-        studentId,
+        studentId: profile.uid,
+        studentName: profile.displayName || 'Unknown Student',
         amount: parseFloat(amount),
         status: 'pending',
-        timestamp: new Date().toISOString()
+        createdAt: now.toISOString(),
+        expiryDate: expiry.toISOString()
       });
       setRequestId(docRef.id);
+      setSuccess(true);
     } catch (err) {
       console.error(err);
     } finally {
@@ -80,6 +87,7 @@ const RequestLoadModal = ({ isOpen, onClose, studentId }: { isOpen: boolean, onC
   const handleClose = () => {
     setAmount('');
     setRequestId(null);
+    setSuccess(false);
     onClose();
   };
 
@@ -92,7 +100,7 @@ const RequestLoadModal = ({ isOpen, onClose, studentId }: { isOpen: boolean, onC
         animate={{ opacity: 1, scale: 1 }}
         className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl"
       >
-        {!requestId ? (
+        {!success ? (
           <>
             <h2 className="text-2xl font-bold mb-6">Request Load</h2>
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -124,20 +132,25 @@ const RequestLoadModal = ({ isOpen, onClose, studentId }: { isOpen: boolean, onC
                   disabled={loading}
                   className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-100 transition-colors disabled:opacity-50"
                 >
-                  {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Generate QR'}
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Submit Request'}
                 </button>
               </div>
             </form>
           </>
         ) : (
           <div className="text-center">
+            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+              <CheckCircle2 className="w-10 h-10 text-green-600" />
+            </div>
+            <h2 className="text-2xl font-bold text-zinc-900 mb-2">Request Successful</h2>
+            <p className="text-zinc-500 mb-6 text-sm">Your request for ₱{parseFloat(amount).toLocaleString()} has been submitted. Present your ID to the cashier to process your load.</p>
+            
             <div className="flex justify-center mb-6">
               <div className="p-4 bg-white border-4 border-indigo-600 rounded-3xl shadow-xl">
-                <QRCodeCanvas value={requestId} size={200} />
+                <QRCodeCanvas value={requestId || ''} size={180} />
               </div>
             </div>
-            <h2 className="text-2xl font-bold text-zinc-900 mb-2">Request Generated</h2>
-            <p className="text-zinc-500 mb-6 text-sm">Present this QR code to the cashier to process your load of ₱{parseFloat(amount).toLocaleString()}.</p>
+
             <div className="bg-zinc-50 p-3 rounded-xl mb-6 flex items-center justify-center gap-2">
               <span className="text-xs font-mono text-zinc-400">ID: {requestId}</span>
             </div>
@@ -379,12 +392,31 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
   const [pendingRequest, setPendingRequest] = useState<{ id: string, student: UserProfile, request: LoadRequest } | null>(null);
   const [qrLoading, setQrLoading] = useState(false);
 
-  const handleFetchRequest = async () => {
-    if (!qrRequestId) return;
+  // Real-time Pending Requests List
+  const [pendingRequests, setPendingRequests] = useState<LoadRequest[]>([]);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'load_requests'),
+      where('status', '==', 'pending'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LoadRequest));
+      setPendingRequests(requests);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleFetchRequest = async (id?: string) => {
+    const targetId = id || qrRequestId;
+    if (!targetId) return;
     setQrLoading(true);
     setStatus(null);
     try {
-      const requestDoc = await getDoc(doc(db, 'load_requests', qrRequestId));
+      const requestDoc = await getDoc(doc(db, 'load_requests', targetId));
       if (!requestDoc.exists()) throw new Error('Request not found');
       
       const requestData = requestDoc.data() as LoadRequest;
@@ -406,7 +438,7 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
     }
   };
 
-  const handleApproveRequest = async () => {
+  const handleProcessRequest = async (approved: boolean) => {
     if (!pendingRequest) return;
     setLoading(true);
     try {
@@ -418,34 +450,43 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
         const rDoc = await transaction.get(requestRef);
 
         if (!sDoc.exists() || !rDoc.exists()) throw new Error("Document missing");
-        if (rDoc.data().status !== 'pending') throw new Error("Already approved");
+        if (rDoc.data().status !== 'pending') throw new Error("Already processed");
 
-        const newBalance = (sDoc.data().balance || 0) + pendingRequest.request.amount;
-        
-        transaction.update(studentRef, { balance: newBalance });
-        transaction.update(requestRef, { status: 'approved' });
+        if (approved) {
+          const newBalance = (sDoc.data().balance || 0) + pendingRequest.request.amount;
+          transaction.update(studentRef, { balance: newBalance });
+          transaction.update(requestRef, { status: 'approved' });
 
-        const transRef = doc(collection(db, 'transactions'));
-        transaction.set(transRef, {
-          studentId: pendingRequest.student.uid,
-          cashierId: profile.uid,
-          amount: pendingRequest.request.amount,
-          type: 'load',
-          timestamp: new Date().toISOString(),
-          description: `QR Load approved by ${profile.displayName}`
-        });
+          const transRef = doc(collection(db, 'transactions'));
+          transaction.set(transRef, {
+            studentId: pendingRequest.student.uid,
+            cashierId: profile.uid,
+            amount: pendingRequest.request.amount,
+            type: 'load',
+            timestamp: new Date().toISOString(),
+            description: `QR Load approved by ${profile.displayName}`
+          });
+        } else {
+          transaction.update(requestRef, { status: 'disapproved' });
+        }
       });
 
-      setStatus({ type: 'success', message: `Approved ₱${pendingRequest.request.amount} for ${pendingRequest.student.displayName}` });
+      setStatus({ 
+        type: approved ? 'success' : 'error', 
+        message: approved ? `Approved ₱${pendingRequest.request.amount} for ${pendingRequest.student.displayName}` : `Disapproved request for ${pendingRequest.student.displayName}`
+      });
       setPendingRequest(null);
       setQrRequestId('');
     } catch (err: any) {
       console.error(err);
-      setStatus({ type: 'error', message: err.message || 'Approval failed' });
+      setStatus({ type: 'error', message: err.message || 'Transaction failed' });
     } finally {
       setLoading(false);
     }
   };
+
+  const handleApproveRequest = () => handleProcessRequest(true);
+  const handleDisapproveRequest = () => handleProcessRequest(false);
 
   const handleLoadBalance = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -601,10 +642,11 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
                   
                   <div className="flex gap-3">
                     <button
-                      onClick={() => setPendingRequest(null)}
-                      className="flex-1 py-3 bg-white text-zinc-600 font-bold rounded-xl border border-indigo-100 hover:bg-indigo-100/50 transition-all"
+                      onClick={handleDisapproveRequest}
+                      disabled={loading}
+                      className="flex-1 py-3 bg-red-50 text-red-600 font-bold rounded-xl border border-red-100 hover:bg-red-100 transition-all disabled:opacity-50"
                     >
-                      Cancel
+                      Disapprove
                     </button>
                     <button
                       onClick={handleApproveRequest}
@@ -617,6 +659,33 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
                   </div>
                 </div>
               )}
+
+              {/* Pending Requests List */}
+              <div className="mt-8">
+                <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">Pending Requests</h3>
+                <div className="space-y-3">
+                  {pendingRequests.filter(r => new Date(r.expiryDate) > new Date()).length === 0 ? (
+                    <p className="text-zinc-400 text-sm italic">No active pending requests</p>
+                  ) : (
+                    pendingRequests
+                      .filter(r => new Date(r.expiryDate) > new Date())
+                      .map(req => (
+                        <div key={req.id} className="p-4 bg-zinc-50 rounded-2xl flex items-center justify-between border border-zinc-100">
+                          <div>
+                            <p className="font-bold text-zinc-900">{req.studentName}</p>
+                            <p className="text-xs text-zinc-500">₱{req.amount.toLocaleString()} • Requested {format(new Date(req.createdAt), 'MMM dd')}</p>
+                          </div>
+                          <button 
+                            onClick={() => handleFetchRequest(req.id)}
+                            className="text-indigo-600 text-sm font-bold hover:underline"
+                          >
+                            Process
+                          </button>
+                        </div>
+                      ))
+                  )}
+                </div>
+              </div>
 
               {status && (
                 <motion.div 
@@ -658,25 +727,43 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
 
 const StudentDashboard = ({ profile }: { profile: UserProfile }) => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [loadRequests, setLoadRequests] = useState<LoadRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [isLoadModalOpen, setIsLoadModalOpen] = useState(false);
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
 
   useEffect(() => {
-    const q = query(
+    // Transactions listener
+    const qTrans = query(
       collection(db, 'transactions'),
       where('studentId', '==', profile.uid),
       orderBy('timestamp', 'desc'),
       limit(5)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubTrans = onSnapshot(qTrans, (snapshot) => {
       const transData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
       setTransactions(transData);
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    // Load Requests listener
+    const qRequests = query(
+      collection(db, 'load_requests'),
+      where('studentId', '==', profile.uid),
+      orderBy('createdAt', 'desc'),
+      limit(10)
+    );
+
+    const unsubRequests = onSnapshot(qRequests, (snapshot) => {
+      const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LoadRequest));
+      setLoadRequests(requests);
+    });
+
+    return () => {
+      unsubTrans();
+      unsubRequests();
+    };
   }, [profile.uid]);
 
   return (
@@ -720,13 +807,65 @@ const StudentDashboard = ({ profile }: { profile: UserProfile }) => {
       <RequestLoadModal 
         isOpen={isLoadModalOpen} 
         onClose={() => setIsLoadModalOpen(false)} 
-        studentId={profile.uid} 
+        profile={profile} 
       />
       <PayFeesModal 
         isOpen={isPayModalOpen} 
         onClose={() => setIsPayModalOpen(false)} 
         profile={profile} 
       />
+
+      {/* Active Requests */}
+      {loadRequests.length > 0 && (
+        <div className="space-y-4">
+          <h3 className="text-xl font-bold text-zinc-900 flex items-center gap-2 px-2">
+            <QrCode className="w-6 h-6 text-zinc-400" />
+            Active Requests
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {loadRequests.map(req => {
+              const isExpired = new Date(req.expiryDate) < new Date();
+              return (
+                <div 
+                  key={req.id} 
+                  className={cn(
+                    "p-6 rounded-3xl border transition-all",
+                    req.status === 'pending' ? "bg-white border-zinc-100 shadow-sm" : 
+                    req.status === 'approved' ? "bg-green-50 border-green-100" : "bg-red-50 border-red-100"
+                  )}
+                >
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-widest text-zinc-400 mb-1">Amount</p>
+                      <p className="text-2xl font-black text-zinc-900">₱{req.amount.toLocaleString()}</p>
+                    </div>
+                    <div className={cn(
+                      "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest",
+                      isExpired && req.status === 'pending' ? "bg-zinc-200 text-zinc-500" :
+                      req.status === 'pending' ? "bg-indigo-100 text-indigo-600" :
+                      req.status === 'approved' ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"
+                    )}>
+                      {isExpired && req.status === 'pending' ? 'Expired' : req.status}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-zinc-400">
+                      {isExpired && req.status === 'pending' ? 'Request expired' : 
+                       req.status === 'pending' ? `Expires ${format(new Date(req.expiryDate), 'MMM dd')}` :
+                       `Processed ${format(new Date(req.createdAt), 'MMM dd')}`}
+                    </p>
+                    {req.status === 'pending' && !isExpired && (
+                      <div className="p-2 bg-zinc-100 rounded-lg">
+                        <QrCode className="w-4 h-4 text-zinc-400" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Transaction History */}
       <div className="space-y-4">
