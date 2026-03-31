@@ -618,11 +618,12 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
           const transRef = doc(collection(db, 'transactions'));
           transaction.set(transRef, {
             studentId: pendingRequest.student.uid,
+            studentName: pendingRequest.student.displayName,
             cashierId: profile.uid,
             amount: pendingRequest.request.amount,
             type: 'load',
             timestamp: new Date().toISOString(),
-            description: `QR Load approved by ${profile.displayName}`
+            description: `QR Load approved for ${pendingRequest.student.displayName}`
           });
         } else {
           transaction.update(requestRef, { status: 'disapproved' });
@@ -680,11 +681,12 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
         const transRef = doc(collection(db, 'transactions'));
         transaction.set(transRef, {
           studentId: studentData.uid,
+          studentName: studentData.displayName,
           cashierId: profile.uid,
           amount: parseFloat(amount),
           type: 'load',
           timestamp: new Date().toISOString(),
-          description: `Balance load by ${profile.displayName}`
+          description: `Manual load for ${studentData.displayName}`
         });
       });
 
@@ -837,7 +839,7 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
                         disabled={loading}
                         className="flex-1 py-3 bg-white text-red-600 font-bold rounded-xl border border-red-100 hover:bg-red-50 transition-all disabled:opacity-50"
                       >
-                        Reject
+                        Disapprove
                       </button>
                       <button
                         onClick={handleApproveRequest}
@@ -853,6 +855,52 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
               </div>
             </motion.div>
           </div>
+
+          {/* Pending Requests List */}
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="bg-white rounded-3xl p-8 border border-zinc-100 shadow-sm"
+          >
+            <h2 className="text-xl font-bold text-zinc-900 mb-6 flex items-center gap-2">
+              <Clock className="text-indigo-600 w-6 h-6" />
+              Pending Load Requests
+            </h2>
+
+            {requestsLoading ? (
+              <div className="py-12 flex justify-center">
+                <Loader2 className="w-8 h-8 animate-spin text-zinc-200" />
+              </div>
+            ) : pendingRequests.length === 0 ? (
+              <div className="py-12 text-center bg-zinc-50 rounded-2xl border border-dashed border-zinc-200">
+                <p className="text-zinc-400 font-medium">No pending requests at the moment</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {pendingRequests.map((req) => (
+                  <div key={req.id} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center border border-zinc-100">
+                        <UserIcon className="w-5 h-5 text-zinc-400" />
+                      </div>
+                      <div>
+                        <p className="font-bold text-zinc-900">{req.studentName}</p>
+                        <p className="text-xs text-zinc-500">Amount: <span className="font-bold text-zinc-900">₱{req.amount.toLocaleString()}</span></p>
+                        <p className="text-[10px] text-zinc-400 uppercase tracking-tighter">ID: {req.id}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleFetchRequest(req.id)}
+                      className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 transition-all"
+                    >
+                      Review Request
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </motion.div>
 
           {/* Global Transaction History */}
           <motion.div 
@@ -886,7 +934,10 @@ const CashierDashboard = ({ profile }: { profile: UserProfile }) => {
                       </div>
                       <div>
                         <p className="font-bold text-zinc-900">{tx.description}</p>
-                        <p className="text-xs text-zinc-500">{format(new Date(tx.timestamp), 'MMM dd, yyyy • hh:mm a')}</p>
+                        <p className="text-[10px] text-zinc-500 font-medium">
+                          {tx.studentName ? `Student: ${tx.studentName}` : `ID: ${tx.studentId}`}
+                        </p>
+                        <p className="text-[10px] text-zinc-400">{format(new Date(tx.timestamp), 'MMM dd, yyyy • hh:mm a')}</p>
                       </div>
                     </div>
                     <div className="text-right">
