@@ -284,6 +284,7 @@ const LoadingScreen = () => (
 const AuthScreen = ({ onRoleSelect }: { onRoleSelect: (role: UserRole) => void }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   const handleLogin = async (role: UserRole) => {
     setLoading(true);
@@ -293,8 +294,11 @@ const AuthScreen = ({ onRoleSelect }: { onRoleSelect: (role: UserRole) => void }
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
 
+      console.log('Login Successful, fetching role for UID:', user.uid);
+      
       // Check if profile exists
       const userDoc = await getDoc(doc(db, 'users', user.uid));
+      
       if (!userDoc.exists()) {
         // Create new profile
         const newProfile: UserProfile = {
@@ -306,25 +310,74 @@ const AuthScreen = ({ onRoleSelect }: { onRoleSelect: (role: UserRole) => void }
           studentId: role === 'student' ? `STU-${Math.floor(100000 + Math.random() * 900000)}` : undefined
         };
         await setDoc(doc(db, 'users', user.uid), newProfile);
+        console.log('User Role Found (New):', role);
+        
+        if (role === 'cashier') {
+          navigate('/cashier-dashboard');
+        } else if (role === 'student') {
+          navigate('/student-dashboard');
+        } else {
+          throw new Error('Unauthorized Access: Invalid role selected.');
+        }
       } else {
-        const existingRole = userDoc.data().role;
-        if (existingRole !== role) {
-          setError(`You are already registered as a ${existingRole}. Please login as ${existingRole}.`);
+        const profileData = userDoc.data() as UserProfile;
+        const existingRole = profileData.role;
+        console.log('User Role Found:', existingRole);
+
+        if (!existingRole) {
+          setError('Unauthorized Access: Role not defined for this account.');
           await signOut(auth);
           setLoading(false);
           return;
         }
+
+        if (existingRole !== role) {
+          setError(`Unauthorized Access: You are registered as a ${existingRole}. Please login as ${existingRole}.`);
+          await signOut(auth);
+          setLoading(false);
+          return;
+        }
+
+        if (existingRole === 'cashier') {
+          navigate('/cashier-dashboard');
+        } else if (existingRole === 'student') {
+          navigate('/student-dashboard');
+        } else {
+          setError('Unauthorized Access: Unknown role.');
+          await signOut(auth);
+          setLoading(false);
+        }
       }
     } catch (err: any) {
-      console.error(err);
+      console.error('Login Error:', err);
       setError(err.message || 'Failed to login');
-    } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-6">
+    <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-6 relative">
+      {/* Full-screen Loading Overlay */}
+      <AnimatePresence>
+        {loading && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-white/90 backdrop-blur-md z-[100] flex flex-col items-center justify-center"
+          >
+            <div className="relative">
+              <Loader2 className="w-16 h-16 animate-spin text-indigo-600" />
+              <div className="absolute inset-0 blur-2xl bg-indigo-400/20 animate-pulse rounded-full" />
+            </div>
+            <p className="mt-6 text-zinc-900 font-black text-2xl tracking-tighter animate-bounce">
+              Verifying Identity...
+            </p>
+            <p className="text-zinc-400 text-sm font-medium">Please wait while we secure your session</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -963,14 +1016,17 @@ function AppContent() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      console.log('Auth User:', firebaseUser ? { uid: firebaseUser.uid, email: firebaseUser.email } : 'None');
+      console.log('Auth State Changed:', firebaseUser ? { uid: firebaseUser.uid, email: firebaseUser.email } : 'None');
       setUser(firebaseUser);
+      
       if (firebaseUser) {
+        setProfileLoading(true);
         const unsubProfile = onSnapshot(doc(db, 'users', firebaseUser.uid), (docSnap) => {
           if (docSnap.exists()) {
             const profileData = docSnap.data() as UserProfile;
@@ -980,14 +1036,17 @@ function AppContent() {
             console.warn('No profile found for user:', firebaseUser.uid);
             setProfile(null);
           }
+          setProfileLoading(false);
           setLoading(false);
         }, (error) => {
           console.error('Profile Subscription Error:', error);
+          setProfileLoading(false);
           setLoading(false);
         });
         return () => unsubProfile();
       } else {
         setProfile(null);
+        setProfileLoading(false);
         setLoading(false);
       }
     });
@@ -996,6 +1055,17 @@ function AppContent() {
   }, []);
 
   if (loading) return <LoadingScreen />;
+
+  // If user is logged in but profile is still loading, show a neutral loading state
+  // to prevent AuthScreen from unmounting too early or showing "Setting up profile"
+  if (user && profileLoading && !profile) {
+    return (
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center">
+        <Loader2 className="w-12 h-12 animate-spin text-indigo-600 mb-4" />
+        <p className="text-zinc-900 font-bold">Loading secure session...</p>
+      </div>
+    );
+  }
 
   if (!user) {
     return (
@@ -1011,8 +1081,9 @@ function AppContent() {
       <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
         <div className="text-center">
           <Loader2 className="w-8 h-8 animate-spin text-indigo-600 mx-auto mb-4" />
-          <p className="text-zinc-600 font-bold">Setting up your profile...</p>
-          <button onClick={() => signOut(auth)} className="mt-4 text-indigo-600 font-bold hover:underline">Sign Out</button>
+          <p className="text-zinc-600 font-bold">Account profile not found.</p>
+          <p className="text-zinc-400 text-sm mb-4">Please contact support if this persists.</p>
+          <button onClick={() => signOut(auth)} className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold">Sign Out</button>
         </div>
       </div>
     );
@@ -1051,7 +1122,7 @@ function AppContent() {
         <div key={location.pathname}>
           <Routes location={location}>
             <Route 
-              path="/cashier" 
+              path="/cashier-dashboard" 
               element={
                 profile.role === 'cashier' ? (
                   <motion.main
@@ -1063,12 +1134,12 @@ function AppContent() {
                     <CashierDashboard profile={profile} />
                   </motion.main>
                 ) : (
-                  <Navigate to="/student" replace />
+                  <Navigate to="/student-dashboard" replace />
                 )
               } 
             />
             <Route 
-              path="/student" 
+              path="/student-dashboard" 
               element={
                 profile.role === 'student' ? (
                   <motion.main
@@ -1080,13 +1151,13 @@ function AppContent() {
                     <StudentDashboard profile={profile} />
                   </motion.main>
                 ) : (
-                  <Navigate to="/cashier" replace />
+                  <Navigate to="/cashier-dashboard" replace />
                 )
               } 
             />
             <Route 
               path="/" 
-              element={<Navigate to={profile.role === 'cashier' ? "/cashier" : "/student"} replace />} 
+              element={<Navigate to={profile.role === 'cashier' ? "/cashier-dashboard" : "/student-dashboard"} replace />} 
             />
             <Route 
               path="*" 
